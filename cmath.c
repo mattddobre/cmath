@@ -3,8 +3,9 @@
 #include <stdint.h>
 #include <math.h>
 #include "cmath.h"
+#define M_PI 3.14159265358979323846
 
-#define QR_ITER 10 
+#define max_iters 10
 
 struct cnum_implementation {
 	float a; 
@@ -65,6 +66,10 @@ float cnum_mag(cnum *c1) {
 	return sqrt ( pow(c1->a, 2) + pow(c1->b, 2) );
 }
 
+float cnum_mag_squared(cnum *c1) { 
+	return pow(c1->a, 2) + pow(c1->b, 2) ;
+}
+
 cnum *cadd(cnum *c1, cnum *c2){ 
     return cnum_init(c1->a + c2->a, c1->b + c2->b);
 }
@@ -104,8 +109,8 @@ cmat *cmat_mul(cmat *a, cmat *b){
 			for(k = 0; k < a->m; k++){ 
 				cnum *prod = cmul(a->cmat[i][k], b->cmat[k][j]);
 				cnum *sum = cadd(result_array[i][j], prod);
-				free(result_array[i][j]);
-				free(prod);
+				delete_cnum(result_array[i][j]);
+				delete_cnum(prod);
 				result_array[i][j] = sum;
 			}
 		}
@@ -147,6 +152,10 @@ float cmat_norm(cmat *m){
 
 cmat *cmat_normalize(cmat *m){ 
 	float norm = cmat_norm(m);
+	if (norm == 0) { 
+		//printf("Cannot normalize zero vector\n");
+		return m;
+	}
 	cnum *norm_cnum = cnum_init(1 / norm, 0);
 	cmat *normalized = cmat_const_mul(norm_cnum, m);
 	free(norm_cnum);
@@ -216,7 +225,7 @@ cmat *cmat_hermetian(cmat *m){
 		for(j = 0; j < m->m; j++){ 
 			cnum *cji = cnum_init(m->cmat[i][j]->a, m->cmat[i][j]->b);
 			transposed_array[j][i] = cnum_conj(cji);
-			//free(cji);
+			delete_cnum(cji);
 		}
 	}
 
@@ -229,12 +238,16 @@ cmat *cmat_hermetian(cmat *m){
 void delete_cmat(cmat *m){ 
 	for(int i = 0; i < m->n; i++){ 
 		for(int j = 0; j < m->m; j++){ 
-			free(m->cmat[i][j]);
+			delete_cnum(m->cmat[i][j]);
 		}
 		free(m->cmat[i]);
 	}
 	free(m->cmat);
 	free(m);
+}
+
+void delete_cnum(cnum *c){ 
+	free(c);
 }
 
 void print_cnum(cnum *c, int newline){ 
@@ -256,10 +269,11 @@ void print_cmat(cmat *m){
 // computes proejction p that reflects vector about a plane
 // projects a nx1 vector onto another nx1 vector b that is parallel 
 // to the x axis or the (1, 0, 0 ... ) axis, to be used in QR decomposition
-
 cmat* householder_reflection_x(cmat *m){ 
 
+	//printf("Dimensions of Rxx: %d x %d\n", m->n, m->m);	
 	cmat *I = cmat_identity(m->n);
+
 	// construct vector b which is just 1, 0, 0, ...
 	cmat *b = cmat_init(m->n, 1, cnum_array_init(m->n, 1));
 	b->cmat[0][0] = cnum_init(1, 0);
@@ -267,9 +281,15 @@ cmat* householder_reflection_x(cmat *m){
 		b->cmat[i][0] = cnum_init(0, 0);
 	}
 
+	// norm of m
 	cnum *norm_m = cnum_init(cmat_norm(m), 0);
+	//printf("Norm of vector m: %f\n", cmat_norm(m));
+	
+	// magnitude of m1 
 	float mag = cnum_mag(m->cmat[0][0]);
-	cnum *beta = cnum_init(m->cmat[0][0]->a/mag, m->cmat[0][0]->b / mag);
+
+	// check beta initialization
+	cnum *beta = cnum_init(m->cmat[0][0]->a / mag, m->cmat[0][0]->b / mag);
 
 	cmat *scaled_b = NULL;
 
@@ -277,7 +297,7 @@ cmat* householder_reflection_x(cmat *m){
 		scaled_b = cmat_const_mul(norm_m, b);
 	}else { 
 		cnum *coeff = cmul(beta, norm_m);
-		scaled_b = cmat_const_mul(coeff, b); // add in appropriate scale to the b vector
+		scaled_b = cmat_const_mul(coeff, b); 
 		free(coeff);
 	}
 
@@ -285,16 +305,25 @@ cmat* householder_reflection_x(cmat *m){
 	cmat *u = NULL;
 	if (m->cmat[0][0]->a >= 0 && m->cmat[0][0]->b == 0) { 
 		u = cmat_add(m, scaled_b);
+	} else if (m->cmat[0][0]->a < 0 && m->cmat[0][0]->b == 0) { 
+		u = cmat_sub(m, scaled_b);
 	} else { 
 		u = cmat_sub(m, scaled_b);
 	}
 
 	cmat *n = cmat_normalize(u);
+	//printf("Normalized vector n:\n");	
+	//print_cmat(n);
 	cmat *n_t = cmat_hermetian(n);
 
+
 	cmat *outer_product = cmat_mul(n, n_t);
+	//printf("Outer product n * n^H:\n");
+	//print_cmat(outer_product);
 	cnum *two = cnum_init(2, 0);
 	cmat *scaled_outer = cmat_const_mul(two, outer_product);
+	//printf("Outer product 2 * n * n^H:\n");
+	//print_cmat(scaled_outer);
 	cmat *result = cmat_sub(I, scaled_outer);
 
 	// free what is used for computation
@@ -308,12 +337,13 @@ cmat* householder_reflection_x(cmat *m){
 	free(two);
 	delete_cmat(I);
 	delete_cmat(scaled_outer);
-
+	delete_cnum(beta);
+	//printf("Householder reflection matrix:\n");
+	//print_cmat(result);
 	
 	return result;
 
 }
-
 // embed Householder reflection matrix p of size nxn into the lower part of an identity matrix of size mxm
 cmat *houseolder_embedding(cmat *p, int m){ 
 	if(m < p->n){ 
@@ -326,7 +356,7 @@ cmat *houseolder_embedding(cmat *p, int m){
 	int i, j; 
 	for(i = 0; i < p->n; i++){ 
 		for(j = 0; j < p->n; j++){ 
-			//free(I->cmat[m - p->n + i][m - p->n + j]);
+			free(I->cmat[m - p->n + i][m - p->n + j]);
 			I->cmat[m - p->n + i][m - p->n + j] = cnum_init(p->cmat[i][j]->a, p->cmat[i][j]->b);
 		}
 	}
@@ -346,9 +376,9 @@ cmat *cmat_copy(cmat *m) {
 
 cmat *QR_decomposition(cmat *A, cmat **R_out){ 
 	int n = A->n;
-	cnum ***A_copy = cmat_copy(A)->cmat;
-	
-	cmat *R = cmat_init(A->n, A->m, A_copy);
+	//cnum ***A_copy = cmat_copy(A)->cmat;
+
+	cmat *R = cmat_copy(A);
 	cmat *Q_total = cmat_identity(A->n);
 
 	for(int k = 0; k < n-1; k++){ 
@@ -359,11 +389,17 @@ cmat *QR_decomposition(cmat *A, cmat **R_out){
 			subvector_array[i - k][0] = cnum_init(R->cmat[i][k]->a, R->cmat[i][k]->b);
 		}
 		cmat *subvector = cmat_init(R->n - k, 1, subvector_array);
-
+		//printf("Subvector at iteration %d:\n", k);
+		//print_cmat(subvector);
 		cmat *P_k = householder_reflection_x(subvector);
+		//printf("Householder matrix P_%d:\n", k);
+		//print_cmat(P_k);
+
 		cmat *E_k = houseolder_embedding(P_k, A->n);
 
 		cmat *R_new = cmat_mul(E_k, R);
+		//printf("Updated R matrix at iteration %d:\n", k);
+		//print_cmat(R_new);
 		cmat *Q_total_new = cmat_mul(Q_total, E_k);
 
 		delete_cmat(R);
@@ -377,12 +413,19 @@ cmat *QR_decomposition(cmat *A, cmat **R_out){
 	}
 
 	*R_out = R;
+
+	// force lower triangle of R to be exactly zero
+	for (int i = 0; i < R->n; i++) { 
+		for (int j = 0; j < i; j++) { 
+			free(R->cmat[i][j]);
+			R->cmat[i][j] = cnum_init(0, 0);
+		}
+	}
 	return Q_total;
 }
 
-// return eigenvalues as computed using QR decomposition
-// oh we're modifying A
-cmat *eigenvalues(cmat *A, int max_iters){ 
+
+cmat *eigenvalues(cmat *A) {
 	int i; 
 	cmat *A_0 = cmat_copy(A);
 	for (i = 0; i < max_iters; i++) {
@@ -391,46 +434,57 @@ cmat *eigenvalues(cmat *A, int max_iters){
 
 		delete_cmat(A_0);
 		cmat *A_next = cmat_mul(R, Q);
-		A_0 = A_next;
+	
+		//delete_cmat(A_0);
+		A_0 = A_next; 
+
 		delete_cmat(R);
 		delete_cmat(Q);
+		//delete_cmat(A_next);
+		
 
 	}
 	// placeholder function
 	return A_0;
 }
+// return eigenvalues as computed using QR decomposition
+// oh we're modifying A
+
 
 
 // return eigenvectors as computed using QR decomposition
-cmat *eigenvectors(cmat *A, int max_iters) {
+cmat *eigenvectors(cmat *A) {
 	int i; 
-	cmat *A_0= cmat_copy(A);
+	cmat *A_0 = cmat_copy(A);
 	cmat *E_0 = cmat_identity(A->n);
 	for (i = 0; i < max_iters; i++) {
 		cmat *R = NULL;
 		cmat *Q = QR_decomposition(A_0, &R);
 
+		delete_cmat(A_0);
 		cmat *A_next = cmat_mul(R, Q);
 		cmat *E_next = cmat_mul(E_0, Q);
-		
-		delete_cmat(A_0);
+	
 		delete_cmat(E_0);
 		A_0 = A_next; 
 		E_0 = E_next;
 
 		delete_cmat(R);
 		delete_cmat(Q);
+		delete_cmat(A_next);
+		
 
 	}
 	// placeholder function
 	return E_0;
 }
 
+// find largest eigenvalue on diagonal 
 int find_largest_eigenvalue_index(cmat *eigvals) { 
 	int idx = 0;
 	float min_mag = cnum_mag(eigvals->cmat[0][0]);
 	for (int j = 1; j < eigvals->m; j++) { 
-		float mag = cnum_mag(eigvals->cmat[0][j]);
+		float mag = cnum_mag(eigvals->cmat[j][j]);
 		if (mag > min_mag) { 
 			min_mag = mag;
 			idx = j;
@@ -451,10 +505,12 @@ cmat *cmat_remove_lowest_eigenvector(int idx, cmat *eigenvects){
 			if (j == idx) {
 				continue;
 			}
-			eigenvects_reduced[i][col_idx] = cnum_init(eigenvects->cmat[i][j]->a, eigenvects->cmat[i][j]->b);
+			cnum *cij = cnum_init(eigenvects->cmat[i][j]->a, eigenvects->cmat[i][j]->b);
+			eigenvects_reduced[i][col_idx] = cij;
 			col_idx++;
 		}
 	}
+
 	return eigenvects_reduced_mat;
 }
 
@@ -473,40 +529,42 @@ cmat *beamforming_array(int num_elements, float angle_rad) {
 
 }
 
-float music_algorithm_theta(int num_elements, cmat *X, float theta_rad) { 
-	printf("1\n");
-	cmat *bf_theta = beamforming_array(num_elements, theta_rad);
-	printf("2\n");
+float music_algorithm_theta(int num_elements, cmat *X, cmat *bf_theta) { 
 	cmat *bf_theta_herm = cmat_hermetian(bf_theta);	
-	printf("3\n");
-
+	print_cmat(bf_theta_herm);
 	cmat *X_herm = cmat_hermetian(X);
-	printf("4\n");
-
 	cmat *Rxx = cmat_mul(X, X_herm);
-	printf("5\n");
-	cmat *eigvect = eigenvectors(Rxx, QR_ITER);
-	printf("6\n");
-	cmat *eigvals = eigenvalues(Rxx, QR_ITER);
-	printf("7\n");
+	print_cmat(Rxx);
+
+	cmat *eigvect = eigenvectors(Rxx);
+
+	cmat *eigvals = eigenvalues(Rxx);
+	// printf("eigenavls and eigenvectosn");
+	// print_cmat(eigvals);
+	// print_cmat(eigvect);
 
 	int largest_eig_idx = find_largest_eigenvalue_index(eigvals);
+
+	//printf("Reduced eigenvector matrix:\n");
 	cmat *eigvect_reduced = cmat_remove_lowest_eigenvector(largest_eig_idx, eigvect);
-	printf("8\n");
+	//print_cmat(eigvect_reduced);
+	
+	//printf("Reduced eigenvector matrix:\n");
 	cmat *eigvect_reduced_herm = cmat_hermetian(eigvect_reduced);
-	printf("9\n");
+	
 	cmat *denom_mat = cmat_mul(bf_theta_herm, eigvect_reduced);
-	printf("10\n");
-	denom_mat = cmat_mul(denom_mat, eigvect_reduced_herm);
-	printf("11\n");
-	denom_mat = cmat_mul(denom_mat, bf_theta);		
-	printf("12\n");
-	float denom_mag = cnum_mag(denom_mat->cmat[0][0]);
+	
+	cmat *temp1 = cmat_mul(denom_mat, eigvect_reduced_herm);
+	delete_cmat(denom_mat);
+	cmat *temp2 = cmat_mul(temp1, bf_theta);
+	delete_cmat(temp1);
+
+	
+	float denom_mag = cnum_mag(temp2->cmat[0][0]);
 	float P_music = 1 / denom_mag;
 
 	// free everything not used for computation
-	free(denom_mat);
-	delete_cmat(bf_theta);
+	delete_cmat(temp2);
 	delete_cmat(bf_theta_herm);
 	delete_cmat(X_herm);
 	delete_cmat(Rxx);
@@ -514,7 +572,6 @@ float music_algorithm_theta(int num_elements, cmat *X, float theta_rad) {
 	delete_cmat(eigvals);
 	delete_cmat(eigvect_reduced);
 	delete_cmat(eigvect_reduced_herm);	
-	printf("13\n");
 
 	return P_music;
 }
@@ -523,13 +580,17 @@ float find_max_music(int num_elements, cmat *X, float start_angle_rad, float end
 	float max_P = -1.0;
 	float max_angle = start_angle_rad;
 	for (float theta = start_angle_rad; theta <= end_angle_rad; theta += step_rad) { 
-		float P_music = music_algorithm_theta(num_elements, X, theta);
+		cmat *bf_theta = beamforming_array(num_elements, theta);
+		printf("Beamforming vector at angle (rad): %f\n", theta);
+		print_cmat(bf_theta);
+		float P_music = music_algorithm_theta(num_elements, X, bf_theta);
+		delete_cmat(bf_theta);
 		if (P_music > max_P) { 
 			max_P = P_music;
 			max_angle = theta;
 		}
 	}
-	float max_angle_deg = 180 * max_angle / 3.141592653589793;
+	float max_angle_deg = 180 * max_angle / M_PI;
 	printf("Max MUSIC P: %f at angle (deg): %f\n", max_P, max_angle_deg);
 	return max_angle_deg;
 }
