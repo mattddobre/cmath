@@ -14,10 +14,10 @@ int main(void) {
 	
 	cnum ***A_array = cnum_array_init(k, 1);
 
-	A_array[0][0] = cnum_init(-7, 21);
-	A_array[1][0] = cnum_init(3, 33);
-	A_array[2][0] = cnum_init(40, -5);
-	A_array[3][0] = cnum_init(0, -39);
+	A_array[0][0] = cnum_init(-38, 23);
+	A_array[1][0] = cnum_init(26, 8);
+	A_array[2][0] = cnum_init(-18, -25);
+	A_array[3][0] = cnum_init(-64, -27);
 
 	cnum ***B_array = cnum_array_init(k, 1);
 	B_array[0][0] = cnum_init(-7, 21);
@@ -91,8 +91,8 @@ int main(void) {
 	printf("Matrix D:\n");	
 	print_cmat(D);
 
-	cmat *B_t = cmat_hermetian(B);
-	cmat *Rxx = cmat_mul(A, B_t);
+	cmat *A_t = cmat_hermetian(A);
+	cmat *Rxx = cmat_mul(A, A_t);
 	printf("Correlation matrix Rxx = A * B^H:\n");
 	print_cmat(Rxx);
 
@@ -153,7 +153,7 @@ int main(void) {
 	delete_cmat(Rxx);
 	delete_cmat(A);
 	delete_cmat(B);	
-	delete_cmat(B_t);
+	delete_cmat(A_t);
 	delete_cmat(D);
 	delete_cmat(h);
 	delete_cmat(R_);

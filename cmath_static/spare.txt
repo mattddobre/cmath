@@ -1,0 +1,243 @@
+	cnum ***B_array = cmat_array_init(k, 1);
+	B_array[0][0] = cnum_init(1, 0);
+	B_array[1][0] = cnum_init(0, 0);
+	B_array[2][0] = cnum_init(0, 0);
+	B_array[3][0] = cnum_init(0, 0);	
+	cmat *B = cmat_init(k, 1, B_array);	
+	*/
+	cmat *A = cmat_init(k, 1, A_array);
+	cmat *A_scaled = cmat_const_mul(cnum_init(1 / 10.0, 0), A);
+	
+	cmat *A_H = cmat_hermetian(A);
+	cmat *Rxx = cmat_mul(A, A_H);
+	cnum *scale = cnum_init(1 / 100.0, 0);
+	cmat *Rxx_scaled = cmat_const_mul(scale, Rxx);
+	//cmat *C = cmat_add(A, B);
+
+
+	printf("Matrix A:\n");
+	print_cmat(A);
+	printf("Matrix A^H:\n");
+	print_cmat(A_H);
+	printf("Matrix Rxx_scaled:\n");
+	print_cmat(Rxx_scaled);
+
+	printf("Householder reflection of A:\n");
+	cmat *h = householder_reflection_x(A);
+	cmat *R = NULL; 
+	cmat *Q = QR_decomposition(Rxx_scaled, &R);
+	printf("Matrix Q from QR decomposition:\n");
+	print_cmat(Q);
+	printf("Matrix R from QR decomposition:\n");
+	print_cmat(R);
+
+	//cmat *bf_array = cmat_array_init(k, 1);
+	cmat *B_0 = beamforming_array(k, M_PI / 6.0);
+	printf("Beamforming array at 30 degrees:\n");
+	print_cmat(B_0);
+
+	cmat *E = eigenvalues(Rxx_scaled);
+	printf("Eigenvalues of Rxx_scaled:\n");
+	print_cmat(E);	
+	cmat *V = eigenvectors(Rxx_scaled);
+	printf("Eigenvectors of Rxx_scaled:\n");
+	print_cmat(V);
+	//float P_music = music_algorithm_theta(k, Rxx_scaled, B_0);
+	//printf("MUSIC P at 30 degrees: %f\n", P_music);
+	
+	float theta_max = find_max_music(k, A_scaled, -M_PI / 2, M_PI / 2, M_PI / 180.0);
+	printf("Maximum MUSIC at angle (degrees): %f\n", theta_max);	
+
+
+		cnum ***M_array = cmat_array_init(4, 4);
+
+	M_array[0][0] = cnum_init(0.754000, 0.000000);
+	M_array[0][1] = cnum_init(0.285504, 0.174084);
+	M_array[0][2] = cnum_init(-0.293787, 0.029691);
+	M_array[0][3] = cnum_init(0.283004, -0.390361);
+
+	M_array[1][0] = cnum_init(0.285504, -0.174084);
+	M_array[1][1] = cnum_init(0.545454, 0.000000);
+	M_array[1][2] = cnum_init(0.319954, -0.242360);
+	M_array[1][3] = cnum_init(-0.052208, 0.653320);
+
+	M_array[2][0] = cnum_init(-0.293787, -0.029691);
+	M_array[2][1] = cnum_init(0.319954, 0.242360);
+	M_array[2][2] = cnum_init(0.645560, 0.000000);
+	M_array[2][3] = cnum_init(0.385095, -0.432034);
+
+	M_array[3][0] = cnum_init(0.283004, 0.390361);
+	M_array[3][1] = cnum_init(-0.052208, -0.653320);
+	M_array[3][2] = cnum_init(0.385095, 0.432034);
+	M_array[3][3] = cnum_init(0.054986, 0.000000);
+
+	/*
+	cmat *M = cmat_init(4, 4, M_array);
+	printf("Matrix M:\n");
+	print_cmat(M);
+	
+
+	cmat_mul(M, B, A);
+	printf("Matrix C = M * B\n");
+	print_cmat(A);
+	
+
+	#define CNUM_PERM_POOL_SIZE   512
+#define CNUM_TEMP_POOL_SIZE   50000
+#define PTR_PERM_POOL_SIZE    512// pointer slots (for cnum*/cnum** arrays)
+#define PTR_TEMP_POOL_SIZE    50000
+#define CMAT_PERM_POOL_SIZE   512
+#define CMAT_TEMP_POOL_SIZE   50000
+
+
+
+struct cnum_implementation { float a; float b; };
+struct cmat_implementation {
+    int n;
+    int m;
+    cnum ***cmat;   // pointer to pointer-to-pointer layout
+};
+
+// Use typedefs from header
+// typedef struct cnum_implementation cnum;
+// typedef struct cmat_implementation cmat;
+
+// -----------------------------
+// Permanent pools (never reset)
+// -----------------------------
+static cnum   cnum_perm_pool[CNUM_PERM_POOL_SIZE];
+static uint16_t cnum_perm_index = 0;
+
+static uintptr_t ptr_perm_pool[PTR_PERM_POOL_SIZE]; // store pointers generically
+static uint16_t   ptr_perm_index = 0;
+
+static cmat   cmat_perm_pool[CMAT_PERM_POOL_SIZE];
+static uint16_t cmat_perm_index = 0;
+
+// -----------------------------
+// Temporary pools (stack-style, mark/reset)
+// -----------------------------
+static cnum   cnum_temp_pool[CNUM_TEMP_POOL_SIZE];
+static uint16_t cnum_temp_index = 0;
+
+static uintptr_t ptr_temp_pool[PTR_TEMP_POOL_SIZE];
+static uint16_t   ptr_temp_index = 0;
+
+static cmat   cmat_temp_pool[CMAT_TEMP_POOL_SIZE];
+static uint16_t cmat_temp_index = 0;
+
+// -----------------------------
+// Mark/reset helpers for temp pools
+// -----------------------------
+static inline uint16_t cnum_temp_mark(void) { return cnum_temp_index; }
+static inline void cnum_temp_reset(uint16_t mark) { cnum_temp_index = mark; }
+
+static inline uint16_t ptr_temp_mark(void) { return ptr_temp_index; }
+static inline void ptr_temp_reset(uint16_t mark) { ptr_temp_index = mark; }
+
+static inline uint16_t cmat_temp_mark(void) { return cmat_temp_index; }
+static inline void cmat_temp_reset(uint16_t mark) { cmat_temp_index = mark; }
+
+// -----------------------------
+// Basic allocators
+// -----------------------------
+// Permanent allocators (for objects that must survive across calls)
+static inline cnum* cnum_perm_alloc(void) {
+    if (cnum_perm_index >= CNUM_PERM_POOL_SIZE) {
+		printf("cnum_perm_alloc: out of memory\n");
+		return NULL;
+    }
+    return &cnum_perm_pool[cnum_perm_index++];
+}
+static inline void* ptr_perm_alloc(int count) {
+    if (ptr_perm_index + count >= PTR_PERM_POOL_SIZE) { 
+		printf("ptr_perm_alloc: out of memory\n");
+		return NULL;
+    }	
+    void* block = (void*)&ptr_perm_pool[ptr_perm_index];
+    ptr_perm_index += count;
+    return block;
+}
+static inline cmat* cmat_perm_alloc(void) {
+    if (cmat_perm_index >= CMAT_PERM_POOL_SIZE) { 
+		printf("cmat_perm_alloc: out of memory\n");
+		return NULL;
+	}
+    // zero-initialize pointers for safety
+    cmat *m = &cmat_perm_pool[cmat_perm_index++];
+    for (int i=0;i< (int)sizeof(m->cmat)/sizeof(void*); ++i) { /*noop*/ }
+    return m;
+}
+
+// Temporary allocators (for short lived temporaries)
+static inline cnum* cnum_temp_alloc(void) {
+    if (cnum_temp_index >= CNUM_TEMP_POOL_SIZE) { 
+		printf("cnum_temp_alloc: out of memory\n");
+		return NULL;
+	}
+    return &cnum_temp_pool[cnum_temp_index++];
+}
+static inline void* ptr_temp_alloc(int count) {
+    if (ptr_temp_index + count >= PTR_TEMP_POOL_SIZE) { 
+		printf("ptr_temp_alloc: out of memory\n");
+		return NULL;
+	}
+    void* block = (void*)&ptr_temp_pool[ptr_temp_index];
+    ptr_temp_index += count;
+    return block;
+}
+static inline cmat* cmat_temp_alloc(void) {
+    if (cmat_temp_index >= CMAT_TEMP_POOL_SIZE) { 
+		printf("cmat_temp_alloc: out of memory\n");
+		return NULL;
+	}
+    return &cmat_temp_pool[cmat_temp_index++];
+}
+
+static cnum *cnum_promote_copy(cnum *src) {
+    cnum *dst = cnum_perm_alloc();
+    if (!dst) return NULL;
+    dst->a = src->a;
+    dst->b = src->b;
+    return dst;
+}
+
+cnum ***cmat_array_promote_copy(cnum ***src, int n, int m) {
+    cnum ***dst = (cnum ***) ptr_perm_alloc(n);
+    if (!dst) return NULL;
+    for (int i = 0; i < n; ++i) {
+        dst[i] = (cnum **) ptr_perm_alloc(m);
+        if (!dst[i]) return NULL;
+        for (int j = 0; j < m; ++j) {
+            dst[i][j] = cnum_promote_copy(src[i][j]);
+            if (!dst[i][j]) return NULL;
+        }
+    }
+    return dst;
+}
+
+cmat *cmat_promote_copy(cmat *src) {
+    if (!src) return NULL;
+    cnum ***array_copy = cmat_array_promote_copy(src->cmat, src->n, src->m);
+    if (!array_copy) return NULL;
+    cmat *dst = cmat_perm_alloc();
+    if (!dst) return NULL;
+    dst->n = src->n;
+    dst->m = src->m;
+    dst->cmat = array_copy;
+    return dst;
+}
+
+
+
+// -----------------------------
+// Utility mark/reset functions for callers (expose if needed)
+// -----------------------------
+uint16_t cnum_mark(void) { return cnum_temp_mark(); }
+void cnum_reset(uint16_t mark) { cnum_temp_reset(mark); }
+
+uint16_t ptr_mark(void) { return ptr_temp_mark(); }
+void ptr_reset(uint16_t mark) { ptr_temp_reset(mark); }
+
+uint16_t cmat_mark(void) { return cmat_temp_mark(); }
+void cmat_reset(uint16_t mark) { cmat_temp_reset(mark); }
