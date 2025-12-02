@@ -1,4 +1,6 @@
-
+// cmath_pool.c
+// Pool-based implementation with TEMP (mark/reset) and PERM (persistent) pools.
+// No malloc/free. Designed for embedded (nRF52 etc).
 
 #include "cmath.h"
 #include <stdio.h>
@@ -10,20 +12,122 @@
 #define M_PI   3.14159265358979323846
 #define MAX_ITERS 5
 
+// -----------------------------
+// Configuration: pool sizes
+// -----------------------------
+
+
+#define CNUM_PERM_POOL_SIZE   512
+#define CNUM_TEMP_POOL_SIZE   5000
+#define PTR_PERM_POOL_SIZE    512// pointer slots (for cnum*/cnum** arrays)
+#define PTR_TEMP_POOL_SIZE    5000
+#define CMAT_PERM_POOL_SIZE   512
+#define CMAT_TEMP_POOL_SIZE   5000
 
 
 
-struct cnum_implementation { 
-	float a; 
-	float b; 
-};
-
-
+struct cnum_implementation { float a; float b; };
 struct cmat_implementation {
     int n;
     int m;
     cnum ***cmat;   // pointer to pointer-to-pointer layout
 };
+
+// Use typedefs from header
+// typedef struct cnum_implementation cnum;
+// typedef struct cmat_implementation cmat;
+
+// -----------------------------
+// Permanent pools (never reset)
+// -----------------------------
+static cnum   cnum_perm_pool[CNUM_PERM_POOL_SIZE];
+static uint16_t cnum_perm_index = 0;
+
+static uintptr_t ptr_perm_pool[PTR_PERM_POOL_SIZE]; // store pointers generically
+static uint16_t   ptr_perm_index = 0;
+
+static cmat   cmat_perm_pool[CMAT_PERM_POOL_SIZE];
+static uint16_t cmat_perm_index = 0;
+
+// -----------------------------
+// Temporary pools (stack-style, mark/reset)
+// -----------------------------
+static cnum   cnum_temp_pool[CNUM_TEMP_POOL_SIZE];
+static uint16_t cnum_temp_index = 0;
+
+static uintptr_t ptr_temp_pool[PTR_TEMP_POOL_SIZE];
+static uint16_t   ptr_temp_index = 0;
+
+static cmat   cmat_temp_pool[CMAT_TEMP_POOL_SIZE];
+static uint16_t cmat_temp_index = 0;
+
+// -----------------------------
+// Mark/reset helpers for temp pools
+// -----------------------------
+static inline uint16_t cnum_temp_mark(void) { return cnum_temp_index; }
+static inline void cnum_temp_reset(uint16_t mark) { cnum_temp_index = mark; }
+
+static inline uint16_t ptr_temp_mark(void) { return ptr_temp_index; }
+static inline void ptr_temp_reset(uint16_t mark) { ptr_temp_index = mark; }
+
+static inline uint16_t cmat_temp_mark(void) { return cmat_temp_index; }
+static inline void cmat_temp_reset(uint16_t mark) { cmat_temp_index = mark; }
+
+// -----------------------------
+// Basic allocators
+// -----------------------------
+// Permanent allocators (for objects that must survive across calls)
+static inline cnum* cnum_perm_alloc(void) {
+    if (cnum_perm_index >= CNUM_PERM_POOL_SIZE) {
+		printf("cnum_perm_alloc: out of memory\n");
+		return NULL;
+    }
+    return &cnum_perm_pool[cnum_perm_index++];
+}
+static inline void* ptr_perm_alloc(int count) {
+    if (ptr_perm_index + count >= PTR_PERM_POOL_SIZE) { 
+		printf("ptr_perm_alloc: out of memory\n");
+		return NULL;
+    }	
+    void* block = (void*)&ptr_perm_pool[ptr_perm_index];
+    ptr_perm_index += count;
+    return block;
+}
+static inline cmat* cmat_perm_alloc(void) {
+    if (cmat_perm_index >= CMAT_PERM_POOL_SIZE) { 
+		printf("cmat_perm_alloc: out of memory\n");
+		return NULL;
+	}
+    // zero-initialize pointers for safety
+    cmat *m = &cmat_perm_pool[cmat_perm_index++];
+    for (int i=0;i< (int)sizeof(m->cmat)/sizeof(void*); ++i) { /*noop*/ }
+    return m;
+}
+
+// Temporary allocators (for short lived temporaries)
+static inline cnum* cnum_temp_alloc(void) {
+    if (cnum_temp_index >= CNUM_TEMP_POOL_SIZE) { 
+		printf("cnum_temp_alloc: out of memory\n");
+		return NULL;
+	}
+    return &cnum_temp_pool[cnum_temp_index++];
+}
+static inline void* ptr_temp_alloc(int count) {
+    if (ptr_temp_index + count >= PTR_TEMP_POOL_SIZE) { 
+		printf("ptr_temp_alloc: out of memory\n");
+		return NULL;
+	}
+    void* block = (void*)&ptr_temp_pool[ptr_temp_index];
+    ptr_temp_index += count;
+    return block;
+}
+static inline cmat* cmat_temp_alloc(void) {
+    if (cmat_temp_index >= CMAT_TEMP_POOL_SIZE) { 
+		printf("cmat_temp_alloc: out of memory\n");
+		return NULL;
+	}
+    return &cmat_temp_pool[cmat_temp_index++];
+}
 
 // -----------------------------
 // Public "API-compatible" constructors
@@ -31,13 +135,10 @@ struct cmat_implementation {
 // Use `promote_*` to copy them into PERM pools if needed.
 // -----------------------------
 cnum *cnum_init(float a, float b) {
-	cnum *c = cnum_temp_alloc();
-	if (!c) {
-		return NULL;
-	}
-	c->a = a;
-	c->b = b;
-    return c;	
+    cnum *c = cnum_temp_alloc();
+    if (!c) return NULL;
+    c->a = a; c->b = b;
+    return c;
 }
 
 // allocate pointer-arrays and cnum entries as TEMP
@@ -68,6 +169,58 @@ cmat *cmat_init(int n, int m, cnum ***array) {
     mat->cmat = array;
     return mat;
 }
+
+// -----------------------------
+// Promote helpers - deep copy TEMP object into PERM pools
+// Must be used when you want to return an object that survives reset.
+// -----------------------------
+static cnum *cnum_promote_copy(cnum *src) {
+    cnum *dst = cnum_perm_alloc();
+    if (!dst) return NULL;
+    dst->a = src->a;
+    dst->b = src->b;
+    return dst;
+}
+
+cnum ***cmat_array_promote_copy(cnum ***src, int n, int m) {
+    cnum ***dst = (cnum ***) ptr_perm_alloc(n);
+    if (!dst) return NULL;
+    for (int i = 0; i < n; ++i) {
+        dst[i] = (cnum **) ptr_perm_alloc(m);
+        if (!dst[i]) return NULL;
+        for (int j = 0; j < m; ++j) {
+            dst[i][j] = cnum_promote_copy(src[i][j]);
+            if (!dst[i][j]) return NULL;
+        }
+    }
+    return dst;
+}
+
+cmat *cmat_promote_copy(cmat *src) {
+    if (!src) return NULL;
+    cnum ***array_copy = cmat_array_promote_copy(src->cmat, src->n, src->m);
+    if (!array_copy) return NULL;
+    cmat *dst = cmat_perm_alloc();
+    if (!dst) return NULL;
+    dst->n = src->n;
+    dst->m = src->m;
+    dst->cmat = array_copy;
+    return dst;
+}
+
+
+
+// -----------------------------
+// Utility mark/reset functions for callers (expose if needed)
+// -----------------------------
+uint16_t cnum_mark(void) { return cnum_temp_mark(); }
+void cnum_reset(uint16_t mark) { cnum_temp_reset(mark); }
+
+uint16_t ptr_mark(void) { return ptr_temp_mark(); }
+void ptr_reset(uint16_t mark) { ptr_temp_reset(mark); }
+
+uint16_t cmat_mark(void) { return cmat_temp_mark(); }
+void cmat_reset(uint16_t mark) { cmat_temp_reset(mark); }
 
 // -----------------------------
 // Math helpers (use TEMP allocations internally)
@@ -692,15 +845,12 @@ float find_max_music(int num_elements, cmat *X, float start_angle_rad, float end
         if (p > maxP) { maxP = p; best = th; }
         // free temporaries by resetting temp pools between iterations:
 		
-		/*
         cnum_temp_index = 0;
         ptr_temp_index = 0;
         cmat_temp_index = 0;
 		cnum_perm_index = 0;
 		ptr_perm_index = 0;
 		cmat_perm_index = 0;
-		*/
-		
 		
 
     }
